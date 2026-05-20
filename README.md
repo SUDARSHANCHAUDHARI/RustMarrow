@@ -15,7 +15,7 @@ Personal local AI memory agent. Pulls your GitHub, Gmail, Calendar, and Slack in
 Requires Rust 1.75+.
 
 ```bash
-git clone https://github.com/SUDARSHANCHAUDHARI/marrow
+git clone https://github.com/SUDARSHANCHAUDHARI/RustMarrow
 cd marrow
 cp .env.example ~/.marrow/.env
 # Fill in your tokens (see Configuration below)
