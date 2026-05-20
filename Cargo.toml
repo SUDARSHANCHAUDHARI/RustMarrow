@@ -1,0 +1,25 @@
+[package]
+name = "marrow"
+version = "0.1.0"
+edition = "2021"
+description = "Personal local AI memory agent"
+
+[[bin]]
+name = "marrow"
+path = "src/main.rs"
+
+[dependencies]
+clap = { version = "4", features = ["derive"] }
+tokio = { version = "1", features = ["full"] }
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+rusqlite = { version = "0.32", features = ["bundled"] }
+anyhow = "1"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+dotenvy = "0.15"
+chrono = { version = "0.4", features = ["serde"] }
+dirs = "5"
+base64 = "0.22"
+urlencoding = "2"

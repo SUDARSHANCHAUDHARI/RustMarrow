@@ -1,0 +1,31 @@
+# Rust
+/target
+Cargo.lock.bak
+
+# Marrow runtime files — never commit
+.env
+*.db
+*.db-shm
+*.db-wal
+
+# macOS
+.DS_Store
+.AppleDouble
+.LSOverride
+
+# Editor
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Logs
+*.log
+
+# Claude Code local settings
+.claude/settings.local.json
+.claude-plugin-config.json
+
+# Secrets
+secrets.*
+credentials.*
