@@ -1,6 +1,6 @@
 # Contributing
 
-Thanks for considering a contribution.
+This is primarily a solo-maintained project by Sudarshan Chaudhari. Issues and pull requests are welcome, but the project stays intentionally small and practical.
 
 ## Local Setup
 
@@ -28,6 +28,7 @@ cargo build --release
 - Update the README or examples when CLI behavior changes.
 - Do not commit secrets, `.env` files, tokens, private keys, signing material, or local machine config.
 - Explain user-visible behavior changes in the pull request description.
+- Avoid broad rewrites unless they clearly reduce maintenance cost.
 
 ## Release Notes
 
