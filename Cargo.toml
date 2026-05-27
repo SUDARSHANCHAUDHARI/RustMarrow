@@ -7,6 +7,8 @@ description = "Personal local AI memory agent"
 license = "MIT"
 repository = "https://github.com/SUDARSHANCHAUDHARI/RustMarrow"
 readme = "README.md"
+keywords = ["memory", "agent", "sqlite", "cli", "local"]
+categories = ["command-line-utilities", "database"]
 
 [[bin]]
 name = "marrow"
