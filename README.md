@@ -104,6 +104,33 @@ marrow open
 marrow auth google
 ```
 
+## Included Example
+
+The repository includes local setup guidance in [examples/local-setup.md](examples/local-setup.md). It uses placeholder values only and is safe to commit.
+
+Real CLI help output:
+
+```text
+Personal local AI memory agent
+
+Usage: marrow <COMMAND>
+
+Commands:
+  pull    Pull data from configured sources into memory
+  digest  Morning briefing — schedule, commits, emails, slack
+  search  Search memory without asking Claude
+  ask     Ask Marrow a question using your memory context
+  clear   Delete all memory for a source
+  forget  Delete one chunk by id (get id from `marrow search`)
+  open    Open the Obsidian vault Marrow folder (macOS)
+  status  Show memory stats
+  auth    Authenticate with a provider and print the refresh token
+  help    Print this message or the help of the given subcommand(s)
+
+Options:
+  -h, --help  Print help
+```
+
 ## Storage Layout
 
 ```text
