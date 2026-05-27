@@ -34,18 +34,14 @@ enum Command {
         limit: usize,
     },
     /// Ask Marrow a question using your memory context
-    Ask {
-        question: String,
-    },
+    Ask { question: String },
     /// Delete all memory for a source
     Clear {
         /// Source to clear: github, gmail, calendar, slack
         source: String,
     },
     /// Delete one chunk by id (get id from `marrow search`)
-    Forget {
-        id: i64,
-    },
+    Forget { id: i64 },
     /// Open the Obsidian vault Marrow folder (macOS)
     Open,
     /// Show memory stats
@@ -121,11 +117,13 @@ async fn main() -> Result<()> {
                 };
 
                 let (r1, r2, r3) = tokio::join!(gmail_fut, cal_fut, slack_fut);
-                r1?; r2?; r3?;
+                r1?;
+                r2?;
+                r3?;
             }
-            Some(s) => anyhow::bail!(
-                "Unknown source '{s}'. Supported: github, gmail, calendar, slack"
-            ),
+            Some(s) => {
+                anyhow::bail!("Unknown source '{s}'. Supported: github, gmail, calendar, slack")
+            }
         },
 
         Command::Digest => {

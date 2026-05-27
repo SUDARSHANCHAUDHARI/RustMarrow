@@ -69,13 +69,22 @@ pub async fn pull(cfg: &Config, store: &Store) -> Result<()> {
 
     let mut total = 0usize;
     for channel in &channels {
-        let name = channel.name.as_deref().unwrap_or(if channel.is_dm { "DM" } else { &channel.id });
+        let name =
+            channel
+                .name
+                .as_deref()
+                .unwrap_or(if channel.is_dm { "DM" } else { &channel.id });
         let messages = fetch_history(&client, token, &channel.id, &oldest).await?;
 
         for msg in &messages {
             // Skip bot messages, join/leave events
-            if msg.msg_type != "message" { continue; }
-            if matches!(msg.subtype.as_deref(), Some("bot_message") | Some("channel_join") | Some("channel_leave")) {
+            if msg.msg_type != "message" {
+                continue;
+            }
+            if matches!(
+                msg.subtype.as_deref(),
+                Some("bot_message") | Some("channel_join") | Some("channel_leave")
+            ) {
                 continue;
             }
 
@@ -85,7 +94,13 @@ pub async fn pull(cfg: &Config, store: &Store) -> Result<()> {
             };
 
             // ts is a Unix timestamp string like "1234567890.123456"
-            let ts_secs = msg.ts.split('.').next().unwrap_or("0").parse::<i64>().unwrap_or(0);
+            let ts_secs = msg
+                .ts
+                .split('.')
+                .next()
+                .unwrap_or("0")
+                .parse::<i64>()
+                .unwrap_or(0);
             let dt = chrono::DateTime::from_timestamp(ts_secs, 0)
                 .unwrap_or_default()
                 .format("%Y-%m-%d %H:%M")
@@ -96,7 +111,10 @@ pub async fn pull(cfg: &Config, store: &Store) -> Result<()> {
             store.ingest(&Chunk {
                 source: "slack".into(),
                 source_id: format!("{}:{}", channel.id, msg.ts),
-                title: format!("Slack #{name}: {}", text.chars().take(60).collect::<String>()),
+                title: format!(
+                    "Slack #{name}: {}",
+                    text.chars().take(60).collect::<String>()
+                ),
                 content: format!("Channel: {name}\nUser: {user_ref}\nTime: {dt}\n\n{text}"),
                 url: None,
                 tags: vec!["slack".into(), name.to_string()],
@@ -148,7 +166,11 @@ async fn fetch_channels(
         );
     }
 
-    Ok(resp.channels.into_iter().filter(|c| c.is_member || c.is_dm).collect())
+    Ok(resp
+        .channels
+        .into_iter()
+        .filter(|c| c.is_member || c.is_dm)
+        .collect())
 }
 
 async fn fetch_history(
@@ -157,9 +179,8 @@ async fn fetch_history(
     channel_id: &str,
     oldest: &str,
 ) -> Result<Vec<SlackMessage>> {
-    let url = format!(
-        "{SLACK_API}/conversations.history?channel={channel_id}&oldest={oldest}&limit=100"
-    );
+    let url =
+        format!("{SLACK_API}/conversations.history?channel={channel_id}&oldest={oldest}&limit=100");
     let resp: HistoryResp = client
         .get(&url)
         .bearer_auth(token)
@@ -171,7 +192,10 @@ async fn fetch_history(
 
     if !resp.ok {
         // not_in_channel or missing scope — skip gracefully
-        tracing::debug!("Skipping channel {channel_id}: {}", resp.error.as_deref().unwrap_or("unknown error"));
+        tracing::debug!(
+            "Skipping channel {channel_id}: {}",
+            resp.error.as_deref().unwrap_or("unknown error")
+        );
         return Ok(vec![]);
     }
 

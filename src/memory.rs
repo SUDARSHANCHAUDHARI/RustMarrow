@@ -1,7 +1,7 @@
 use crate::db::Database;
 use anyhow::Result;
 use chrono::{DateTime, Utc};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 pub struct Chunk {
     pub source: String,
@@ -29,7 +29,11 @@ pub struct Store {
 
 impl Store {
     pub fn new(db: Database, db_path: PathBuf, obsidian_path: Option<PathBuf>) -> Self {
-        Self { db, db_path, obsidian_path }
+        Self {
+            db,
+            db_path,
+            obsidian_path,
+        }
     }
 
     pub fn ingest(&self, chunk: &Chunk) -> Result<()> {
@@ -197,14 +201,13 @@ impl Store {
 
     /// Delete all memory chunks + pull history for a source. Also cleans Obsidian folder.
     pub fn clear(&self, source: &str) -> Result<usize> {
-        let deleted = self.db.conn.execute(
-            "DELETE FROM memory_chunks WHERE source = ?1",
-            [source],
-        )?;
-        self.db.conn.execute(
-            "DELETE FROM pull_log WHERE source = ?1",
-            [source],
-        )?;
+        let deleted = self
+            .db
+            .conn
+            .execute("DELETE FROM memory_chunks WHERE source = ?1", [source])?;
+        self.db
+            .conn
+            .execute("DELETE FROM pull_log WHERE source = ?1", [source])?;
         if let Some(vault) = &self.obsidian_path {
             let dir = vault.join("Marrow").join(source);
             if dir.exists() {
@@ -226,10 +229,10 @@ impl Store {
             )
             .ok();
 
-        let deleted = self.db.conn.execute(
-            "DELETE FROM memory_chunks WHERE id = ?1",
-            [id],
-        )?;
+        let deleted = self
+            .db
+            .conn
+            .execute("DELETE FROM memory_chunks WHERE id = ?1", [id])?;
 
         if deleted == 0 {
             anyhow::bail!("No chunk with id {id}");
@@ -237,7 +240,10 @@ impl Store {
 
         if let (Some(vault), Some((source, title))) = (&self.obsidian_path, chunk_info) {
             let safe = title.replace(['/', '\\', ':', '*', '?', '"', '<', '>', '|'], "-");
-            let path = vault.join("Marrow").join(&source).join(format!("{safe}.md"));
+            let path = vault
+                .join("Marrow")
+                .join(&source)
+                .join(format!("{safe}.md"));
             if path.exists() {
                 std::fs::remove_file(path).ok();
             }
@@ -291,7 +297,7 @@ impl Store {
         Ok(())
     }
 
-    fn write_obsidian(&self, vault: &PathBuf, chunk: &Chunk) -> Result<()> {
+    fn write_obsidian(&self, vault: &Path, chunk: &Chunk) -> Result<()> {
         let dir = vault.join("Marrow").join(&chunk.source);
         std::fs::create_dir_all(&dir)?;
 

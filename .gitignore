@@ -29,3 +29,9 @@ Cargo.lock.bak
 # Secrets
 secrets.*
 credentials.*
+*.pem
+*.key
+*.jks
+*.keystore
+local.properties
+secure.properties

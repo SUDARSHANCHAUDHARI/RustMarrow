@@ -53,7 +53,10 @@ pub async fn digest(cfg: &Config, store: &Store) -> Result<String> {
         sections.push(format!("## Calendar (upcoming)\n{}", calendar.join("\n\n")));
     }
     if !commits.is_empty() {
-        sections.push(format!("## GitHub (recent activity)\n{}", commits.join("\n\n")));
+        sections.push(format!(
+            "## GitHub (recent activity)\n{}",
+            commits.join("\n\n")
+        ));
     }
     if !emails.is_empty() {
         sections.push(format!("## Gmail (recent)\n{}", emails.join("\n\n")));

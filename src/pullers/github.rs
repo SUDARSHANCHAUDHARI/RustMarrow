@@ -133,7 +133,13 @@ pub async fn pull(cfg: &Config, store: &Store) -> Result<()> {
         // Incremental commits — only since last pull
         let commits = fetch_commits(&client, cfg, &repo.full_name, &since.to_rfc3339()).await?;
         for commit in &commits {
-            let first_line = commit.commit.message.lines().next().unwrap_or("").to_string();
+            let first_line = commit
+                .commit
+                .message
+                .lines()
+                .next()
+                .unwrap_or("")
+                .to_string();
             store.ingest(&Chunk {
                 source: "github".into(),
                 source_id: format!("commit:{}", &commit.sha[..8]),
@@ -175,9 +181,7 @@ async fn fetch_issues(
     full_name: &str,
     since: &str,
 ) -> Result<Vec<Issue>> {
-    let url = format!(
-        "{GITHUB_API}/repos/{full_name}/issues?state=open&per_page=50&since={since}"
-    );
+    let url = format!("{GITHUB_API}/repos/{full_name}/issues?state=open&per_page=50&since={since}");
     Ok(client
         .get(&url)
         .bearer_auth(&cfg.github_token)

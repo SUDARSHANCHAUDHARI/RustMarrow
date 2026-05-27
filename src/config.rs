@@ -42,8 +42,7 @@ impl Config {
         Ok(Self {
             github_token: std::env::var("GITHUB_TOKEN")
                 .context("GITHUB_TOKEN not set — copy .env.example to .env and fill it in")?,
-            github_username: std::env::var("GITHUB_USERNAME")
-                .context("GITHUB_USERNAME not set")?,
+            github_username: std::env::var("GITHUB_USERNAME").context("GITHUB_USERNAME not set")?,
             anthropic_api_key: std::env::var("ANTHROPIC_API_KEY")
                 .context("ANTHROPIC_API_KEY not set")?,
             db_path,
@@ -57,7 +56,11 @@ impl Config {
     }
 
     pub fn google_creds(&self) -> Option<(&str, &str, &str)> {
-        match (&self.google_client_id, &self.google_client_secret, &self.google_refresh_token) {
+        match (
+            &self.google_client_id,
+            &self.google_client_secret,
+            &self.google_refresh_token,
+        ) {
             (Some(id), Some(secret), Some(token)) => Some((id, secret, token)),
             _ => None,
         }

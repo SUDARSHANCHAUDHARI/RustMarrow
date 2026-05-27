@@ -116,7 +116,13 @@ pub async fn pull(cfg: &Config, store: &Store) -> Result<()> {
             } else {
                 attendee_list.join(", ")
             },
-            event.description.as_deref().unwrap_or("").chars().take(400).collect::<String>()
+            event
+                .description
+                .as_deref()
+                .unwrap_or("")
+                .chars()
+                .take(400)
+                .collect::<String>()
         );
 
         store.ingest(&Chunk {

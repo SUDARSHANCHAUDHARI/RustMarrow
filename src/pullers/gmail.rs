@@ -79,10 +79,7 @@ pub async fn pull(cfg: &Config, store: &Store) -> Result<()> {
         "after:{after_ts} (is:unread OR is:important) -category:promotions -category:social"
     );
 
-    info!(
-        "Pulling Gmail since {}",
-        since.format("%Y-%m-%d %H:%M")
-    );
+    info!("Pulling Gmail since {}", since.format("%Y-%m-%d %H:%M"));
 
     let url = format!(
         "{GMAIL_API}/messages?maxResults=50&q={}",
