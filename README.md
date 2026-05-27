@@ -1,44 +1,76 @@
 # Marrow
 
-Personal local AI memory agent. Pulls your GitHub, Gmail, Calendar, and Slack into a local SQLite database and lets you query it with Claude.
+[![CI](https://github.com/SUDARSHANCHAUDHARI/RustMarrow/actions/workflows/ci.yml/badge.svg)](https://github.com/SUDARSHANCHAUDHARI/RustMarrow/actions/workflows/ci.yml)
+![Rust](https://img.shields.io/badge/Rust-1.75%2B-orange?logo=rust)
+![License](https://img.shields.io/badge/License-MIT-blue)
 
-## What it does
+Marrow is a personal local AI memory agent. It pulls selected GitHub, Gmail, Calendar, and Slack data into a local SQLite database, optionally mirrors memory chunks into Obsidian Markdown, and lets you search or ask questions over that local context with Claude.
 
-- **Pulls** data from your connected sources every 20 minutes (via launchd)
-- **Stores** everything locally in SQLite — nothing leaves your machine except API calls
-- **Syncs** to your Obsidian vault as Markdown files
-- **Answers** questions about your work using Claude with your data as context
-- **Digests** a morning briefing — schedule, commits, emails, Slack in one shot
+## Why This Exists
 
-## Install
+Personal work context is spread across commits, issues, messages, calendar events, and email. Marrow is designed as a local-first memory layer that helps you recover that context without sending everything to a hosted database.
 
-Requires Rust 1.75+.
+## Features
+
+- Pulls recent GitHub repository activity, issues, pull requests, and commits.
+- Pulls Gmail messages when Google OAuth credentials are configured.
+- Pulls Google Calendar events when Google OAuth credentials are configured.
+- Pulls Slack channel or DM history when a Slack user token is configured.
+- Stores memory chunks locally in SQLite.
+- Tracks incremental pulls so repeated syncs only fetch new data.
+- Searches local memory without spending model tokens.
+- Asks Claude questions using recent local memory as context.
+- Generates a digest across configured sources.
+- Clears all memory for a source or deletes a single chunk by id.
+- Optionally writes memory chunks into an Obsidian vault.
+
+## Privacy Model
+
+Marrow is local-first. The SQLite database lives on your machine, and `.env` credentials are intentionally ignored by git. Data only leaves your machine when Marrow calls the configured source APIs or sends selected context to Claude for the `ask` and `digest` flows.
+
+Do not commit `.env`, database files, OAuth credentials, Slack tokens, GitHub tokens, API keys, or Obsidian-generated private memory.
+
+## Installation
 
 ```bash
-git clone https://github.com/SUDARSHANCHAUDHARI/RustMarrow
-cd marrow
-cp .env.example ~/.marrow/.env
-# Fill in your tokens (see Configuration below)
+git clone https://github.com/SUDARSHANCHAUDHARI/RustMarrow.git
+cd RustMarrow
 cargo build --release
-ln -s $(pwd)/target/release/marrow ~/.local/bin/marrow
+```
+
+The binary is created at:
+
+```bash
+target/release/marrow
+```
+
+Optional local install:
+
+```bash
+cargo install --path .
 ```
 
 ## Configuration
 
-Copy `.env.example` to `~/.marrow/.env` and fill in:
+Copy the template and fill in real values locally:
+
+```bash
+mkdir -p ~/.marrow
+cp .env.example ~/.marrow/.env
+```
 
 | Variable | Required | Description |
 |---|---|---|
-| `GITHUB_TOKEN` | ✅ | [Personal access token](https://github.com/settings/tokens) — `repo` scope |
-| `GITHUB_USERNAME` | ✅ | Your GitHub username |
-| `ANTHROPIC_API_KEY` | ✅ | [Anthropic API key](https://console.anthropic.com) |
-| `MARROW_DB_PATH` | optional | Default: `~/.marrow/marrow.db` |
-| `OBSIDIAN_VAULT_PATH` | optional | Path to your Obsidian vault root |
-| `GOOGLE_CLIENT_ID` | optional | For Gmail + Calendar |
-| `GOOGLE_CLIENT_SECRET` | optional | For Gmail + Calendar |
-| `GOOGLE_REFRESH_TOKEN` | optional | Run `marrow auth google` to get this |
-| `SLACK_TOKEN` | optional | User token (`xoxp-`) with `channels:history`, `im:history` scopes |
-| `SLACK_CHANNELS` | optional | Comma-separated channel IDs to restrict to |
+| `GITHUB_TOKEN` | Yes | GitHub personal access token for repository data |
+| `GITHUB_USERNAME` | Yes | GitHub username to scope activity |
+| `ANTHROPIC_API_KEY` | Yes | API key used for Claude-powered answers |
+| `MARROW_DB_PATH` | Optional | SQLite path, defaults to `~/.marrow/marrow.db` |
+| `OBSIDIAN_VAULT_PATH` | Optional | Obsidian vault root for Markdown mirroring |
+| `GOOGLE_CLIENT_ID` | Optional | Google OAuth client id for Gmail and Calendar |
+| `GOOGLE_CLIENT_SECRET` | Optional | Google OAuth client secret |
+| `GOOGLE_REFRESH_TOKEN` | Optional | Refresh token from `marrow auth google` |
+| `SLACK_TOKEN` | Optional | Slack user token for channel/DM history |
+| `SLACK_CHANNELS` | Optional | Comma-separated Slack channel IDs to restrict pulls |
 
 ## Usage
 
@@ -46,58 +78,85 @@ Copy `.env.example` to `~/.marrow/.env` and fill in:
 # Pull all configured sources
 marrow pull
 
-# Pull a specific source
+# Pull one source
 marrow pull --source github
 marrow pull --source gmail
 marrow pull --source calendar
 marrow pull --source slack
 
-# Morning briefing
+# Search local memory
+marrow search "android crash"
+marrow search "open issues" --limit 20
+
+# Ask Claude using local memory context
+marrow ask "what am I working on this week?"
+marrow ask "which issues look urgent?"
+
+# Generate a cross-source digest
 marrow digest
 
-# Search memory (no Claude tokens spent)
-marrow search "android crash"
-marrow search "open issues"
+# Inspect and manage stored memory
+marrow status
+marrow clear github
+marrow forget 42
+marrow open
 
-# Ask a question
-marrow ask "what am I working on this week?"
-marrow ask "any urgent emails?"
-
-# Memory management
-marrow status                  # chunk counts + last pull times
-marrow clear github            # wipe all GitHub data
-marrow forget 42               # delete one chunk by id (get id from search)
-marrow open                    # open Obsidian vault folder (macOS)
-
-# Google OAuth setup (one-time)
+# One-time Google OAuth setup
 marrow auth google
 ```
 
-## Auto-pull (macOS launchd)
+## Storage Layout
 
-Runs `marrow pull` every 20 minutes in the background:
+```text
+~/.marrow/.env          Local credentials, never committed
+~/.marrow/marrow.db     SQLite database with memory_chunks and pull_log
+~/ObsidianVault/Marrow/ Optional Markdown mirror by source
+```
+
+## Automation
+
+Marrow can be run manually or scheduled with macOS `launchd`, cron, or another scheduler. A typical cadence is every 20 minutes:
 
 ```bash
-# Copy the plist (adjust path to match your install)
-cp scripts/ai.marrow.pull.plist ~/Library/LaunchAgents/
-launchctl load ~/Library/LaunchAgents/ai.marrow.pull.plist
-
-# Check logs
-tail -f ~/.marrow/logs/pull.log
+marrow pull
 ```
 
-## Architecture
+Keep scheduler logs outside the repository and avoid writing secrets to stdout.
 
-```
-~/.marrow/.env          — credentials (never committed)
-~/.marrow/marrow.db     — SQLite: memory_chunks + pull_log
-~/ObsidianVault/Marrow/ — Markdown files per source (optional)
+## Development
+
+```bash
+cargo fmt --check
+cargo clippy -- -D warnings
+cargo test
+cargo build --release
 ```
 
-Sources are incremental — each pull only fetches data since the last run.
+The CI workflow runs the same release gates on every push and pull request to `main`.
+
+## Project Structure
+
+```text
+src/
+  main.rs             CLI commands and orchestration
+  config.rs           Environment-driven configuration
+  db.rs               SQLite setup
+  memory.rs           Search, ingest, clear, forget, Obsidian mirror
+  agent.rs            Claude context and answer flow
+  google_auth.rs      Google OAuth token exchange
+  pullers/            GitHub, Gmail, Calendar, and Slack ingestion
+```
+
+## Release Status
+
+Current production release: `v1.0.0`
+
+The `v1.0.0` release was verified with formatting, clippy, tests, optimized release build, and `cargo package`.
 
 ## License
 
-MIT — see [LICENSE](LICENSE)
+MIT. See [LICENSE](LICENSE).
 
-Built by [SudarshanTechLabs](https://github.com/SUDARSHANCHAUDHARI)
+## Developer
+
+Built by [Sudarshan Chaudhari](https://github.com/SUDARSHANCHAUDHARI) under SudarshanTechLabs.
