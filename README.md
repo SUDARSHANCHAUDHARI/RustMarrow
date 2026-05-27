@@ -1,6 +1,5 @@
 # Marrow
 
-[![CI](https://github.com/SUDARSHANCHAUDHARI/RustMarrow/actions/workflows/ci.yml/badge.svg)](https://github.com/SUDARSHANCHAUDHARI/RustMarrow/actions/workflows/ci.yml)
 ![Rust](https://img.shields.io/badge/Rust-1.75%2B-orange?logo=rust)
 ![License](https://img.shields.io/badge/License-MIT-blue)
 
@@ -132,7 +131,7 @@ cargo test
 cargo build --release
 ```
 
-The CI workflow runs the same release gates on every push and pull request to `main`.
+Run these checks locally before publishing changes.
 
 ## Project Structure
 
