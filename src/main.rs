@@ -7,6 +7,7 @@ mod pullers;
 
 use anyhow::Result;
 use clap::{Parser, Subcommand};
+use std::path::PathBuf;
 use tracing_subscriber::EnvFilter;
 
 #[derive(Parser)]
@@ -46,6 +47,18 @@ enum Command {
     Open,
     /// Show memory stats
     Status,
+    /// Export memory chunks to a JSON backup file
+    Export {
+        /// JSON output file
+        #[arg(long)]
+        json: PathBuf,
+    },
+    /// Import memory chunks from a JSON backup file
+    Import {
+        /// JSON input file
+        #[arg(long)]
+        json: PathBuf,
+    },
     /// Authenticate with a provider and print the refresh token
     Auth {
         /// Provider: google
@@ -175,6 +188,16 @@ async fn main() -> Result<()> {
         }
 
         Command::Status => store.print_stats()?,
+
+        Command::Export { json } => {
+            let count = store.export_json(&json)?;
+            println!("Exported {count} memory chunk(s) to {}", json.display());
+        }
+
+        Command::Import { json } => {
+            let count = store.import_json(&json)?;
+            println!("Imported {count} memory chunk(s) from {}", json.display());
+        }
 
         Command::Auth { .. } => unreachable!(),
     }

@@ -6,7 +6,10 @@ This is a solo-maintained roadmap. Items are practical possibilities, not promis
 
 - Add integration tests around local SQLite memory operations.
 - Add clearer setup validation for missing provider credentials.
-- Add export command for backup-friendly JSON.
+
+## Completed
+
+- Added JSON export/import commands for local memory backups.
 
 ## Maybe Later
 

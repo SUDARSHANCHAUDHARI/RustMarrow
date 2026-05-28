@@ -1,6 +1,7 @@
 use crate::db::Database;
 use anyhow::Result;
 use chrono::{DateTime, Utc};
+use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 
 pub struct Chunk {
@@ -10,6 +11,71 @@ pub struct Chunk {
     pub content: String,
     pub url: Option<String>,
     pub tags: Vec<String>,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct ExportedChunk {
+    pub source: String,
+    pub source_id: String,
+    pub title: String,
+    pub content: String,
+    pub url: Option<String>,
+    pub tags: Vec<String>,
+    pub fetched_at: String,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn temp_db_path(name: &str) -> PathBuf {
+        let mut path = std::env::temp_dir();
+        path.push(format!(
+            "marrow-{name}-{}-{}.db",
+            std::process::id(),
+            Utc::now().timestamp_nanos_opt().unwrap_or_default()
+        ));
+        path
+    }
+
+    fn store_at(path: &PathBuf) -> Store {
+        let db = Database::open(path).unwrap();
+        Store::new(db, path.clone(), None)
+    }
+
+    #[test]
+    fn export_import_json_round_trips_memory_chunks() {
+        let source_path = temp_db_path("source");
+        let target_path = temp_db_path("target");
+        let export_path = temp_db_path("backup").with_extension("json");
+
+        let source = store_at(&source_path);
+        source
+            .ingest(&Chunk {
+                source: "manual".to_string(),
+                source_id: "note-1".to_string(),
+                title: "Production note".to_string(),
+                content: "Remember the release checklist".to_string(),
+                url: Some("https://example.com/note".to_string()),
+                tags: vec!["release".to_string(), "rust".to_string()],
+            })
+            .unwrap();
+
+        let exported = source.export_json(&export_path).unwrap();
+        assert_eq!(exported, 1);
+
+        let target = store_at(&target_path);
+        let imported = target.import_json(&export_path).unwrap();
+        assert_eq!(imported, 1);
+
+        let results = target.search_display("release checklist", 10).unwrap();
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].title, "Production note");
+
+        let _ = std::fs::remove_file(source_path);
+        let _ = std::fs::remove_file(target_path);
+        let _ = std::fs::remove_file(export_path);
+    }
 }
 
 pub struct SearchResult {
@@ -63,6 +129,66 @@ impl Store {
         }
 
         Ok(())
+    }
+
+    pub fn export_json(&self, path: &Path) -> Result<usize> {
+        let mut stmt = self.db.conn.prepare(
+            "SELECT source, source_id, title, content, url, tags, fetched_at
+             FROM memory_chunks
+             ORDER BY fetched_at DESC, id DESC",
+        )?;
+        let chunks = stmt
+            .query_map([], |row| {
+                let tags_json: String = row.get(5)?;
+                let tags = serde_json::from_str(&tags_json).unwrap_or_default();
+                Ok(ExportedChunk {
+                    source: row.get(0)?,
+                    source_id: row.get(1)?,
+                    title: row.get(2)?,
+                    content: row.get(3)?,
+                    url: row.get(4)?,
+                    tags,
+                    fetched_at: row.get(6)?,
+                })
+            })?
+            .collect::<rusqlite::Result<Vec<_>>>()?;
+
+        if let Some(parent) = path.parent() {
+            std::fs::create_dir_all(parent)?;
+        }
+        let json = serde_json::to_string_pretty(&chunks)?;
+        std::fs::write(path, json)?;
+        Ok(chunks.len())
+    }
+
+    pub fn import_json(&self, path: &Path) -> Result<usize> {
+        let content = std::fs::read_to_string(path)?;
+        let chunks: Vec<ExportedChunk> = serde_json::from_str(&content)?;
+
+        for chunk in &chunks {
+            let tags_json = serde_json::to_string(&chunk.tags)?;
+            self.db.conn.execute(
+                "INSERT INTO memory_chunks (source, source_id, title, content, url, tags, fetched_at)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)
+                 ON CONFLICT(source, source_id) DO UPDATE SET
+                   title      = excluded.title,
+                   content    = excluded.content,
+                   url        = excluded.url,
+                   tags       = excluded.tags,
+                   fetched_at = excluded.fetched_at",
+                rusqlite::params![
+                    chunk.source,
+                    chunk.source_id,
+                    chunk.title,
+                    chunk.content,
+                    chunk.url,
+                    tags_json,
+                    chunk.fetched_at,
+                ],
+            )?;
+        }
+
+        Ok(chunks.len())
     }
 
     /// For agent context — single-phrase LIKE, returns formatted markdown

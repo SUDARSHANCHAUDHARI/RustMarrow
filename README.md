@@ -100,6 +100,10 @@ marrow clear github
 marrow forget 42
 marrow open
 
+# Back up and restore local memory
+marrow export --json marrow-backup.json
+marrow import --json marrow-backup.json
+
 # One-time Google OAuth setup
 marrow auth google
 ```
@@ -124,6 +128,8 @@ Commands:
   forget  Delete one chunk by id (get id from `marrow search`)
   open    Open the Obsidian vault Marrow folder (macOS)
   status  Show memory stats
+  export  Export memory chunks to a JSON backup file
+  import  Import memory chunks from a JSON backup file
   auth    Authenticate with a provider and print the refresh token
   help    Print this message or the help of the given subcommand(s)
 
@@ -138,6 +144,8 @@ Options:
 ~/.marrow/marrow.db     SQLite database with memory_chunks and pull_log
 ~/ObsidianVault/Marrow/ Optional Markdown mirror by source
 ```
+
+JSON exports contain memory chunks only: source, source ID, title, content, URL, tags, and fetched timestamp. They do not include provider credentials or `.env` values.
 
 ## Automation
 
