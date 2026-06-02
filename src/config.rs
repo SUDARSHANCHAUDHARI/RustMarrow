@@ -66,3 +66,45 @@ impl Config {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn google_creds_returns_none_when_any_field_missing() {
+        let cfg = Config {
+            github_token: "t".into(),
+            github_username: "u".into(),
+            anthropic_api_key: "k".into(),
+            db_path: PathBuf::from("/tmp/marrow.db"),
+            obsidian_vault_path: None,
+            google_client_id: Some("id".into()),
+            google_client_secret: None,
+            google_refresh_token: Some("tok".into()),
+            slack_token: None,
+            slack_channels: None,
+        };
+        assert!(cfg.google_creds().is_none());
+    }
+
+    #[test]
+    fn google_creds_returns_some_when_all_present() {
+        let cfg = Config {
+            github_token: "t".into(),
+            github_username: "u".into(),
+            anthropic_api_key: "k".into(),
+            db_path: PathBuf::from("/tmp/marrow.db"),
+            obsidian_vault_path: None,
+            google_client_id: Some("id".into()),
+            google_client_secret: Some("secret".into()),
+            google_refresh_token: Some("tok".into()),
+            slack_token: None,
+            slack_channels: None,
+        };
+        let creds = cfg.google_creds().unwrap();
+        assert_eq!(creds.0, "id");
+        assert_eq!(creds.1, "secret");
+        assert_eq!(creds.2, "tok");
+    }
+}
