@@ -11,6 +11,9 @@ env:
   CARGO_TERM_COLOR: always
   BINARY: marrow
 
+permissions:
+  contents: write
+
 jobs:
   ci:
     name: CI (${{ matrix.os }})
