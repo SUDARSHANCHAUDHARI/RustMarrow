@@ -11,7 +11,7 @@ use std::path::PathBuf;
 use tracing_subscriber::EnvFilter;
 
 #[derive(Parser)]
-#[command(name = "marrow", about = "Personal local AI memory agent")]
+#[command(name = "rustmarrow", about = "Personal local AI memory agent")]
 struct Cli {
     #[command(subcommand)]
     command: Command,

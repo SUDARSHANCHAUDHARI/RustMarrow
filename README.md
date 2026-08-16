@@ -40,7 +40,7 @@ cargo build --release
 The binary is created at:
 
 ```bash
-target/release/marrow
+target/release/rustmarrow
 ```
 
 Optional local install:
@@ -67,7 +67,7 @@ cp .env.example ~/.marrow/.env
 | `OBSIDIAN_VAULT_PATH` | Optional | Obsidian vault root for Markdown mirroring |
 | `GOOGLE_CLIENT_ID` | Optional | Google OAuth client id for Gmail and Calendar |
 | `GOOGLE_CLIENT_SECRET` | Optional | Google OAuth client secret |
-| `GOOGLE_REFRESH_TOKEN` | Optional | Refresh token from `marrow auth google` |
+| `GOOGLE_REFRESH_TOKEN` | Optional | Refresh token from `rustmarrow auth google` |
 | `SLACK_TOKEN` | Optional | Slack user token for channel/DM history |
 | `SLACK_CHANNELS` | Optional | Comma-separated Slack channel IDs to restrict pulls |
 
@@ -75,37 +75,37 @@ cp .env.example ~/.marrow/.env
 
 ```bash
 # Pull all configured sources
-marrow pull
+rustmarrow pull
 
 # Pull one source
-marrow pull --source github
-marrow pull --source gmail
-marrow pull --source calendar
-marrow pull --source slack
+rustmarrow pull --source github
+rustmarrow pull --source gmail
+rustmarrow pull --source calendar
+rustmarrow pull --source slack
 
 # Search local memory
-marrow search "android crash"
-marrow search "open issues" --limit 20
+rustmarrow search "android crash"
+rustmarrow search "open issues" --limit 20
 
 # Ask Claude using local memory context
-marrow ask "what am I working on this week?"
-marrow ask "which issues look urgent?"
+rustmarrow ask "what am I working on this week?"
+rustmarrow ask "which issues look urgent?"
 
 # Generate a cross-source digest
-marrow digest
+rustmarrow digest
 
 # Inspect and manage stored memory
-marrow status
-marrow clear github
-marrow forget 42
-marrow open
+rustmarrow status
+rustmarrow clear github
+rustmarrow forget 42
+rustmarrow open
 
 # Back up and restore local memory
-marrow export --json marrow-backup.json
-marrow import --json marrow-backup.json
+rustmarrow export --json marrow-backup.json
+rustmarrow import --json marrow-backup.json
 
 # One-time Google OAuth setup
-marrow auth google
+rustmarrow auth google
 ```
 
 ## Included Example
@@ -117,7 +117,7 @@ Real CLI help output:
 ```text
 Personal local AI memory agent
 
-Usage: marrow <COMMAND>
+Usage: rustmarrow <COMMAND>
 
 Commands:
   pull    Pull data from configured sources into memory
@@ -125,7 +125,7 @@ Commands:
   search  Search memory without asking Claude
   ask     Ask Marrow a question using your memory context
   clear   Delete all memory for a source
-  forget  Delete one chunk by id (get id from `marrow search`)
+  forget  Delete one chunk by id (get id from `rustmarrow search`)
   open    Open the Obsidian vault Marrow folder (macOS)
   status  Show memory stats
   export  Export memory chunks to a JSON backup file
@@ -152,7 +152,7 @@ JSON exports contain memory chunks only: source, source ID, title, content, URL,
 Marrow can be run manually or scheduled with macOS `launchd`, cron, or another scheduler. A typical cadence is every 20 minutes:
 
 ```bash
-marrow pull
+rustmarrow pull
 ```
 
 Keep scheduler logs outside the repository and avoid writing secrets to stdout.
