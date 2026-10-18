@@ -35,3 +35,6 @@ credentials.*
 *.keystore
 local.properties
 secure.properties
+
+# repoguard scan output
+repoguard-results/
