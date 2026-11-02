@@ -1,0 +1,78 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  schedule:
+    # Mondays 02:00 UTC — advisory scan only, the checks job runs per push/PR.
+    - cron: "0 2 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  checks:
+    # Skip on the schedule: nothing changed, so re-running the same checks is noise.
+    if: github.event_name != 'schedule'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      # ubuntu-latest ships a stable Rust toolchain with clippy and rustfmt, so no
+      # toolchain action is needed. Printed for the record when a run is debugged.
+      - name: Toolchain versions
+        run: |
+          cargo --version
+          rustc --version
+          cargo clippy --version
+          cargo fmt --version
+
+      - name: Cache cargo registry and build
+        uses: actions/cache@v6
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-cargo-${{ hashFiles('Cargo.lock') }}
+          restore-keys: ${{ runner.os }}-cargo-
+
+      - name: Format
+        run: cargo fmt --all --check
+
+      # items_after_test_module is a known pre-existing warning in src/memory.rs, where
+      # mod tests sits above later items. Allowed explicitly so every other lint stays
+      # a hard failure; moving that module is its own change.
+      - name: Clippy
+        run: cargo clippy --all-targets -- -D warnings -A clippy::items_after_test_module
+
+      - name: Test
+        run: cargo test
+
+  audit:
+    # Advisory only. cargo-audit costs more to install than it is worth per push, and a
+    # new advisory lands independently of our commits, so this runs weekly and on demand.
+    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Cache cargo-audit
+        uses: actions/cache@v6
+        with:
+          path: ~/.cargo/bin/cargo-audit
+          key: ${{ runner.os }}-cargo-audit
+
+      - name: Install cargo-audit
+        run: |
+          if ! command -v cargo-audit >/dev/null 2>&1; then
+            cargo install cargo-audit --locked
+          fi
+
+      - name: Audit
+        run: cargo audit
