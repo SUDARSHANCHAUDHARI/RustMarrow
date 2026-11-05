@@ -24,60 +24,6 @@ pub struct ExportedChunk {
     pub fetched_at: String,
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    fn temp_db_path(name: &str) -> PathBuf {
-        let mut path = std::env::temp_dir();
-        path.push(format!(
-            "marrow-{name}-{}-{}.db",
-            std::process::id(),
-            Utc::now().timestamp_nanos_opt().unwrap_or_default()
-        ));
-        path
-    }
-
-    fn store_at(path: &PathBuf) -> Store {
-        let db = Database::open(path).unwrap();
-        Store::new(db, path.clone(), None)
-    }
-
-    #[test]
-    fn export_import_json_round_trips_memory_chunks() {
-        let source_path = temp_db_path("source");
-        let target_path = temp_db_path("target");
-        let export_path = temp_db_path("backup").with_extension("json");
-
-        let source = store_at(&source_path);
-        source
-            .ingest(&Chunk {
-                source: "manual".to_string(),
-                source_id: "note-1".to_string(),
-                title: "Production note".to_string(),
-                content: "Remember the release checklist".to_string(),
-                url: Some("https://example.com/note".to_string()),
-                tags: vec!["release".to_string(), "rust".to_string()],
-            })
-            .unwrap();
-
-        let exported = source.export_json(&export_path).unwrap();
-        assert_eq!(exported, 1);
-
-        let target = store_at(&target_path);
-        let imported = target.import_json(&export_path).unwrap();
-        assert_eq!(imported, 1);
-
-        let results = target.search_display("release checklist", 10).unwrap();
-        assert_eq!(results.len(), 1);
-        assert_eq!(results[0].title, "Production note");
-
-        let _ = std::fs::remove_file(source_path);
-        let _ = std::fs::remove_file(target_path);
-        let _ = std::fs::remove_file(export_path);
-    }
-}
-
 pub struct SearchResult {
     pub id: i64,
     pub source: String,
@@ -317,10 +263,49 @@ impl Store {
             .map(|dt| dt.with_timezone(&Utc))
     }
 
-    pub fn log_pull(&self, source: &str, items: usize) -> Result<()> {
+    /// The `(gap_from, resume_before)` range a capped pull left unfetched, if the latest
+    /// row for the source has one.
+    pub fn pull_gap(&self, source: &str) -> Option<(DateTime<Utc>, DateTime<Utc>)> {
+        let (from, before): (Option<String>, Option<String>) = self
+            .db
+            .conn
+            .query_row(
+                "SELECT gap_from, resume_before FROM pull_log WHERE source = ?1 ORDER BY id DESC LIMIT 1",
+                [source],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )
+            .ok()?;
+        let parse = |s: String| {
+            DateTime::parse_from_rfc3339(&s)
+                .ok()
+                .map(|dt| dt.with_timezone(&Utc))
+        };
+        Some((parse(from?)?, parse(before?)?))
+    }
+
+    /// `pulled_at` is when the pull started, which becomes the next pull's `since`.
+    pub fn log_pull(&self, source: &str, items: usize, pulled_at: DateTime<Utc>) -> Result<()> {
+        self.log_pull_gap(source, items, pulled_at, None)
+    }
+
+    /// As `log_pull`, plus the `(gap_from, resume_before)` range still to drain, if any.
+    pub fn log_pull_gap(
+        &self,
+        source: &str,
+        items: usize,
+        pulled_at: DateTime<Utc>,
+        gap: Option<(DateTime<Utc>, DateTime<Utc>)>,
+    ) -> Result<()> {
         self.db.conn.execute(
-            "INSERT INTO pull_log (source, pulled_at, items_fetched) VALUES (?1, ?2, ?3)",
-            rusqlite::params![source, Utc::now().to_rfc3339(), items as i64],
+            "INSERT INTO pull_log (source, pulled_at, items_fetched, gap_from, resume_before)
+             VALUES (?1, ?2, ?3, ?4, ?5)",
+            rusqlite::params![
+                source,
+                pulled_at.to_rfc3339(),
+                items as i64,
+                gap.map(|g| g.0.to_rfc3339()),
+                gap.map(|g| g.1.to_rfc3339()),
+            ],
         )?;
         Ok(())
     }
@@ -334,7 +319,16 @@ impl Store {
         self.db
             .conn
             .execute("DELETE FROM pull_log WHERE source = ?1", [source])?;
-        if let Some(vault) = &self.obsidian_path {
+        // Only a plain folder name may reach remove_dir_all: `..` or an absolute path
+        // would point the recursive delete outside the Marrow folder.
+        let plain_name = matches!(
+            Path::new(source)
+                .components()
+                .collect::<Vec<_>>()
+                .as_slice(),
+            [std::path::Component::Normal(_)]
+        );
+        if let (Some(vault), true) = (&self.obsidian_path, plain_name) {
             let dir = vault.join("Marrow").join(source);
             if dir.exists() {
                 std::fs::remove_dir_all(dir).ok();
@@ -345,13 +339,13 @@ impl Store {
 
     /// Delete one chunk by id. Also removes its Obsidian file.
     pub fn forget(&self, id: i64) -> Result<()> {
-        let chunk_info: Option<(String, String)> = self
+        let chunk_info: Option<(String, String, String)> = self
             .db
             .conn
             .query_row(
-                "SELECT source, title FROM memory_chunks WHERE id = ?1",
+                "SELECT source, source_id, title FROM memory_chunks WHERE id = ?1",
                 [id],
-                |r| Ok((r.get(0)?, r.get(1)?)),
+                |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
             )
             .ok();
 
@@ -364,12 +358,11 @@ impl Store {
             anyhow::bail!("No chunk with id {id}");
         }
 
-        if let (Some(vault), Some((source, title))) = (&self.obsidian_path, chunk_info) {
-            let safe = title.replace(['/', '\\', ':', '*', '?', '"', '<', '>', '|'], "-");
+        if let (Some(vault), Some((source, source_id, title))) = (&self.obsidian_path, chunk_info) {
             let path = vault
                 .join("Marrow")
                 .join(&source)
-                .join(format!("{safe}.md"));
+                .join(note_file_name(&title, &source_id));
             if path.exists() {
                 std::fs::remove_file(path).ok();
             }
@@ -409,7 +402,7 @@ impl Store {
         println!("Marrow — {total} chunks | DB: {db_size}");
         println!();
         if by_source.is_empty() {
-            println!("  No data yet — run `marrow pull`");
+            println!("  No data yet — run `rustmarrow pull`");
         } else {
             for (source, count, last_pull, last_count) in &by_source {
                 let pull_info = match (last_pull, last_count) {
@@ -427,10 +420,7 @@ impl Store {
         let dir = vault.join("Marrow").join(&chunk.source);
         std::fs::create_dir_all(&dir)?;
 
-        let safe = chunk
-            .title
-            .replace(['/', '\\', ':', '*', '?', '"', '<', '>', '|'], "-");
-        let path = dir.join(format!("{safe}.md"));
+        let path = dir.join(note_file_name(&chunk.title, &chunk.source_id));
 
         let tags_yaml = chunk
             .tags
@@ -451,5 +441,140 @@ impl Store {
 
         std::fs::write(path, md)?;
         Ok(())
+    }
+}
+
+/// Obsidian note name: title plus source id, so two chunks with the same title do not
+/// share a file. The title is cut to 150 bytes to stay under the 255-byte filename limit.
+fn note_file_name(title: &str, source_id: &str) -> String {
+    let mut short = String::new();
+    for c in title.chars() {
+        if short.len() + c.len_utf8() > 150 {
+            break;
+        }
+        short.push(c);
+    }
+    format!("{short} ({source_id}).md").replace(['/', '\\', ':', '*', '?', '"', '<', '>', '|'], "-")
+}
+
+#[cfg(test)]
+pub(crate) mod tests {
+    use super::*;
+
+    pub(crate) fn temp_db_path(name: &str) -> PathBuf {
+        let mut path = std::env::temp_dir();
+        path.push(format!(
+            "marrow-{name}-{}-{}.db",
+            std::process::id(),
+            Utc::now().timestamp_nanos_opt().unwrap_or_default()
+        ));
+        path
+    }
+
+    pub(crate) fn store_at(path: &PathBuf) -> Store {
+        let db = Database::open(path).unwrap();
+        Store::new(db, path.clone(), None)
+    }
+
+    #[test]
+    fn an_old_db_without_the_gap_columns_opens_twice() {
+        let path = temp_db_path("migrate");
+        // The pull_log shape before the gap columns existed, with one marker row.
+        let old = rusqlite::Connection::open(&path).unwrap();
+        old.execute_batch(
+            "CREATE TABLE pull_log (
+                id INTEGER PRIMARY KEY, source TEXT NOT NULL, pulled_at TEXT NOT NULL,
+                items_fetched INTEGER NOT NULL, error TEXT);
+             INSERT INTO pull_log (source, pulled_at, items_fetched)
+                VALUES ('gmail', '2026-11-01T00:00:00+00:00', 3);",
+        )
+        .unwrap();
+        drop(old);
+
+        // Second open hits the duplicate-column path and must not fail.
+        drop(store_at(&path));
+        let store = store_at(&path);
+
+        let marker = DateTime::parse_from_rfc3339("2026-11-01T00:00:00+00:00").unwrap();
+        assert_eq!(
+            store.last_pull_at("gmail"),
+            Some(marker.with_timezone(&Utc))
+        );
+        assert_eq!(store.pull_gap("gmail"), None);
+
+        let gap = (marker.with_timezone(&Utc), Utc::now());
+        store.log_pull_gap("gmail", 0, gap.0, Some(gap)).unwrap();
+        assert_eq!(store.pull_gap("gmail"), Some(gap));
+
+        let _ = std::fs::remove_file(path);
+    }
+
+    #[test]
+    fn export_import_json_round_trips_memory_chunks() {
+        let source_path = temp_db_path("source");
+        let target_path = temp_db_path("target");
+        let export_path = temp_db_path("backup").with_extension("json");
+
+        let source = store_at(&source_path);
+        source
+            .ingest(&Chunk {
+                source: "manual".to_string(),
+                source_id: "note-1".to_string(),
+                title: "Production note".to_string(),
+                content: "Remember the release checklist".to_string(),
+                url: Some("https://example.com/note".to_string()),
+                tags: vec!["release".to_string(), "rust".to_string()],
+            })
+            .unwrap();
+
+        let exported = source.export_json(&export_path).unwrap();
+        assert_eq!(exported, 1);
+
+        let target = store_at(&target_path);
+        let imported = target.import_json(&export_path).unwrap();
+        assert_eq!(imported, 1);
+
+        let results = target.search_display("release checklist", 10).unwrap();
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].title, "Production note");
+
+        let _ = std::fs::remove_file(source_path);
+        let _ = std::fs::remove_file(target_path);
+        let _ = std::fs::remove_file(export_path);
+    }
+
+    #[test]
+    fn clear_never_deletes_outside_the_marrow_folder() {
+        let db_path = temp_db_path("clear");
+        let vault = temp_db_path("vault").with_extension("");
+        let outside = vault.join("keep");
+        let inside = vault.join("Marrow").join("gmail");
+        std::fs::create_dir_all(&outside).unwrap();
+        std::fs::create_dir_all(&inside).unwrap();
+        let store = Store::new(
+            Database::open(&db_path).unwrap(),
+            db_path.clone(),
+            Some(vault.clone()),
+        );
+
+        store.clear("..").unwrap();
+        store.clear(outside.to_str().unwrap()).unwrap();
+        assert!(outside.exists() && inside.exists());
+
+        store.clear("gmail").unwrap();
+        assert!(!inside.exists());
+
+        let _ = std::fs::remove_dir_all(vault);
+        let _ = std::fs::remove_file(db_path);
+    }
+
+    #[test]
+    fn note_file_name_is_unique_safe_and_short() {
+        let a = note_file_name("Email: Hello", "msg-1");
+        let b = note_file_name("Email: Hello", "msg-2");
+        assert_ne!(a, b);
+        assert!(!a.contains(['/', ':']));
+        let long = note_file_name(&"é".repeat(500), "commit:o/r:abcdef12");
+        assert!(long.len() < 255, "{} bytes", long.len());
     }
 }

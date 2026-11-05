@@ -66,9 +66,10 @@ struct Attendee {
 }
 
 pub async fn pull(cfg: &Config, store: &Store) -> Result<()> {
+    let started = Utc::now();
     let (client_id, client_secret, refresh_token) = cfg
         .google_creds()
-        .context("Google credentials not set — run `marrow auth google` first")?;
+        .context("Google credentials not set — run `rustmarrow auth google` first")?;
 
     let client = reqwest::Client::builder()
         .user_agent("marrow/0.1")
@@ -151,7 +152,7 @@ pub async fn pull(cfg: &Config, store: &Store) -> Result<()> {
         total += 1;
     }
 
-    store.log_pull("calendar", total)?;
+    store.log_pull("calendar", total, started)?;
     info!("Calendar pull complete: {} events", total);
     Ok(())
 }
@@ -236,8 +237,9 @@ async fn fetch_events(
         }
     }
 
-    // Those events are lost for good, because the pull watermark moves forward
-    // regardless. Loud on purpose.
+    // Events are in start-time order, so the cap drops the furthest-out ones. Calendar does
+    // not use the pull marker: a later run picks them up as the 14-day window slides
+    // forward. Loud on purpose.
     warn!(
         "Calendar events stopped at the {MAX_PAGES}-page cap ({} events); later events were not fetched",
         all.len()
