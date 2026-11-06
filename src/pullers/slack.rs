@@ -3,7 +3,7 @@ use crate::{
     memory::{Chunk, Store},
 };
 use anyhow::{Context, Result};
-use chrono::{Duration, Utc};
+use chrono::{DateTime, Duration, Utc};
 use serde::Deserialize;
 use tracing::{info, warn};
 
@@ -61,6 +61,7 @@ struct SlackMessage {
 }
 
 pub async fn pull(cfg: &Config, store: &Store) -> Result<()> {
+    let started = Utc::now();
     let token = cfg
         .slack_token
         .as_deref()
@@ -70,25 +71,84 @@ pub async fn pull(cfg: &Config, store: &Store) -> Result<()> {
         .user_agent("marrow/0.1")
         .build()?;
 
+    pull_from(
+        &client,
+        token,
+        SLACK_API,
+        cfg.slack_channels.as_deref(),
+        store,
+        started,
+    )
+    .await
+}
+
+/// The pull itself. `api_base` is a parameter so a test can point it at a local server.
+async fn pull_from(
+    client: &reqwest::Client,
+    token: &str,
+    api_base: &str,
+    channel_filter: Option<&str>,
+    store: &Store,
+    started: DateTime<Utc>,
+) -> Result<()> {
     // Incremental: only fetch since last pull (fallback to 24h)
     let since = store
         .last_pull_at("slack")
         .unwrap_or_else(|| Utc::now() - Duration::hours(24));
-    let oldest = since.timestamp().to_string();
+    // A capped run left a gap below `resume_before`. Drain only that; newer messages wait
+    // a run.
+    let gap = store.pull_gap("slack");
+    let (oldest, latest) = match gap {
+        Some((from, before)) => {
+            info!(
+                "Draining Slack gap {} to {}",
+                from.format("%Y-%m-%d %H:%M"),
+                before.format("%Y-%m-%d %H:%M")
+            );
+            (to_ts(from), Some(to_ts(before)))
+        }
+        None => {
+            info!("Pulling Slack since {}", since.format("%Y-%m-%d %H:%M"));
+            (since.timestamp().to_string(), None)
+        }
+    };
+    // A drain keeps the marker where it was; a fresh run moves it to `started`. Capped:
+    // the gap shrinks to below `resume_before`. Not capped: the gap is closed.
+    let (pulled_at, gap_from, upper) = match gap {
+        Some((from, before)) => (since, from, before),
+        None => (started, since, started),
+    };
 
-    info!("Pulling Slack since {}", since.format("%Y-%m-%d %H:%M"));
-
-    let channels = fetch_channels(&client, token, SLACK_API, cfg.slack_channels.as_deref()).await?;
+    let channels = fetch_channels(client, token, api_base, channel_filter).await?;
     info!("{} channels to scan", channels.len());
 
     let mut total = 0usize;
+    // Highest per-channel oldest ts among capped channels: below it, some channel is
+    // still missing messages.
+    let mut resume_before: Option<DateTime<Utc>> = None;
     for channel in &channels {
         let name =
             channel
                 .name
                 .as_deref()
                 .unwrap_or(if channel.is_dm { "DM" } else { &channel.id });
-        let messages = fetch_history(&client, token, SLACK_API, &channel.id, &oldest).await?;
+        let (messages, capped) = fetch_history(
+            client,
+            token,
+            api_base,
+            &channel.id,
+            &oldest,
+            latest.as_deref(),
+        )
+        .await?;
+        if capped {
+            let o = messages
+                .iter()
+                .filter_map(|m| from_ts(&m.ts))
+                .min()
+                .unwrap_or(upper);
+            resume_before = Some(resume_before.map_or(o, |r| r.max(o)));
+        }
 
         for msg in &messages {
             // Skip bot messages, join/leave events
@@ -137,9 +197,20 @@ pub async fn pull(cfg: &Config, store: &Store) -> Result<()> {
         }
     }
 
-    store.log_pull("slack", total)?;
+    let next_gap = resume_before.map(|r| (gap_from, r.min(upper)));
+    store.log_pull_gap("slack", total, pulled_at, next_gap)?;
     info!("Slack pull complete: {} messages", total);
     Ok(())
+}
+
+/// Slack `ts` ("1234567890.123456") to a time, keeping the microseconds.
+fn from_ts(ts: &str) -> Option<DateTime<Utc>> {
+    let (secs, micros) = ts.split_once('.').unwrap_or((ts, "0"));
+    DateTime::from_timestamp(secs.parse().ok()?, micros.parse::<u32>().ok()? * 1000)
+}
+
+fn to_ts(dt: DateTime<Utc>) -> String {
+    format!("{}.{:06}", dt.timestamp(), dt.timestamp_subsec_micros())
 }
 
 /// `api_base` is a parameter so a test can point it at a local server.
@@ -206,13 +277,16 @@ async fn fetch_channels(
     Ok(all)
 }
 
+/// `latest`, when set, bounds a gap drain from above (inclusive). The flag is true when
+/// the page cap, not Slack, ended the walk.
 async fn fetch_history(
     client: &reqwest::Client,
     token: &str,
     api_base: &str,
     channel_id: &str,
     oldest: &str,
-) -> Result<Vec<SlackMessage>> {
+    latest: Option<&str>,
+) -> Result<(Vec<SlackMessage>, bool)> {
     let mut all: Vec<SlackMessage> = Vec::new();
     let mut cursor = String::new();
 
@@ -220,6 +294,9 @@ async fn fetch_history(
         let mut url = format!(
             "{api_base}/conversations.history?channel={channel_id}&oldest={oldest}&limit={PAGE_LIMIT}"
         );
+        if let Some(l) = latest {
+            url.push_str(&format!("&latest={l}&inclusive=true"));
+        }
         if !cursor.is_empty() {
             url.push_str(&format!("&cursor={}", urlencoding::encode(&cursor)));
         }
@@ -234,29 +311,33 @@ async fn fetch_history(
             .await?;
 
         if !resp.ok {
+            // Rate limited: fail the run so the marker does not move past what was skipped.
+            if resp.error.as_deref() == Some("ratelimited") {
+                anyhow::bail!("Slack conversations.history for {channel_id}: ratelimited");
+            }
             // not_in_channel or missing scope — skip gracefully, keeping any earlier page
             tracing::debug!(
                 "Skipping channel {channel_id}: {}",
                 resp.error.as_deref().unwrap_or("unknown error")
             );
-            return Ok(all);
+            return Ok((all, false));
         }
 
         all.extend(resp.messages);
 
         cursor = resp.response_metadata.next_cursor;
         if cursor.is_empty() {
-            return Ok(all);
+            return Ok((all, false));
         }
     }
 
-    // Those messages are lost for good, because the pull watermark moves forward
-    // regardless. Loud on purpose.
+    // Newest come first, so the older messages were dropped; the caller records them as a
+    // gap to drain next run. Loud on purpose.
     warn!(
-        "Slack history for {channel_id} stopped at the {MAX_PAGES}-page cap ({} messages); later messages were not fetched",
+        "Slack history for {channel_id} stopped at the {MAX_PAGES}-page cap ({} messages); older messages were not fetched",
         all.len()
     );
-    Ok(all)
+    Ok((all, true))
 }
 
 #[cfg(test)]
@@ -292,26 +373,38 @@ mod tests {
     /// Serves one canned reply per connection and records the `cursor` each request
     /// carried, so a test can prove the cursor is actually sent back.
     async fn serve(replies: Vec<String>) -> (String, tokio::task::JoinHandle<Vec<String>>) {
+        let (base, raw) = serve_raw(replies).await;
+        let handle = tokio::spawn(async move {
+            raw.await
+                .unwrap()
+                .iter()
+                .map(|req| {
+                    req.split("&cursor=")
+                        .nth(1)
+                        .map(|s| {
+                            s.split(|c: char| c == '&' || c.is_whitespace())
+                                .next()
+                                .unwrap_or("")
+                                .to_string()
+                        })
+                        .unwrap_or_default()
+                })
+                .collect()
+        });
+        (base, handle)
+    }
+
+    /// As `serve`, but yields each raw request.
+    async fn serve_raw(replies: Vec<String>) -> (String, tokio::task::JoinHandle<Vec<String>>) {
         let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
         let addr = listener.local_addr().unwrap();
         let handle = tokio::spawn(async move {
-            let mut cursors = Vec::new();
+            let mut seen = Vec::new();
             for body in replies {
                 let (mut sock, _) = listener.accept().await.unwrap();
                 let mut buf = [0u8; 4096];
                 let n = sock.read(&mut buf).await.unwrap();
-                let req = String::from_utf8_lossy(&buf[..n]).to_string();
-                let sent = req
-                    .split("&cursor=")
-                    .nth(1)
-                    .map(|s| {
-                        s.split(|c: char| c == '&' || c.is_whitespace())
-                            .next()
-                            .unwrap_or("")
-                            .to_string()
-                    })
-                    .unwrap_or_default();
-                cursors.push(sent);
+                seen.push(String::from_utf8_lossy(&buf[..n]).to_string());
                 let resp = format!(
                     "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
                     body.len()
@@ -319,7 +412,7 @@ mod tests {
                 sock.write_all(resp.as_bytes()).await.unwrap();
                 sock.flush().await.unwrap();
             }
-            cursors
+            seen
         });
         (format!("http://{addr}"), handle)
     }
@@ -333,8 +426,11 @@ mod tests {
         .await;
         let client = reqwest::Client::new();
 
-        let msgs = fetch_history(&client, "t", &base, "C1", "0").await.unwrap();
+        let (msgs, capped) = fetch_history(&client, "t", &base, "C1", "0", None)
+            .await
+            .unwrap();
 
+        assert!(!capped);
         // Before the fix only the first page was read, so this was 200, not 211.
         assert_eq!(msgs.len(), PAGE_LIMIT as usize + 11);
         assert_eq!(server.await.unwrap(), vec!["".to_string(), "cur-2".into()]);
@@ -360,8 +456,11 @@ mod tests {
         let (base, server) = serve(vec![history_page(0, 5, None)]).await;
         let client = reqwest::Client::new();
 
-        let msgs = fetch_history(&client, "t", &base, "C1", "0").await.unwrap();
+        let (msgs, capped) = fetch_history(&client, "t", &base, "C1", "0", None)
+            .await
+            .unwrap();
 
+        assert!(!capped);
         assert_eq!(msgs.len(), 5);
         assert_eq!(server.await.unwrap(), vec!["".to_string()]);
     }
@@ -377,8 +476,11 @@ mod tests {
         .await;
         let client = reqwest::Client::new();
 
-        let msgs = fetch_history(&client, "t", &base, "C1", "0").await.unwrap();
+        let (msgs, capped) = fetch_history(&client, "t", &base, "C1", "0", None)
+            .await
+            .unwrap();
 
+        assert!(!capped);
         assert_eq!(msgs.len(), 7);
     }
 
@@ -409,9 +511,91 @@ mod tests {
 
         // The server accepts exactly MAX_PAGES connections, so an 11th request would
         // be refused and this would be an Err.
-        let msgs = fetch_history(&client, "t", &base, "C1", "0").await.unwrap();
+        let (msgs, capped) = fetch_history(&client, "t", &base, "C1", "0", None)
+            .await
+            .unwrap();
 
+        assert!(capped);
         assert_eq!(msgs.len(), (MAX_PAGES * 200) as usize);
         assert_eq!(server.await.unwrap().len(), MAX_PAGES as usize);
+    }
+
+    /// Requests made by `pull_from` for one channel, picked out by `channel=`.
+    fn for_channel<'a>(reqs: &'a [String], id: &str) -> Vec<&'a String> {
+        let tag = format!("channel={id}&");
+        reqs.iter().filter(|r| r.contains(&tag)).collect()
+    }
+
+    #[tokio::test]
+    async fn a_capped_channel_sets_the_gap_and_the_drain_sends_latest() {
+        let path = crate::memory::tests::temp_db_path("slack-gap");
+        let store = crate::memory::tests::store_at(&path);
+        let client = reqwest::Client::new();
+        let pages = MAX_PAGES as usize;
+
+        // Run 1: C1 is capped, one message per page, newest first from ts 1000. C2 has one
+        // message, newer than C1's oldest, so taking it into account would raise the gap.
+        let mut replies: Vec<String> = (0..pages)
+            .map(|i| history_page(1000 - i, 1, Some("more")))
+            .collect();
+        replies.push(history_page(2000, 1, None));
+        let (base, server) = serve_raw(replies).await;
+        let started = Utc::now();
+        pull_from(&client, "t", &base, Some("C1,C2"), &store, started)
+            .await
+            .unwrap();
+        server.await.unwrap();
+
+        let c1_oldest = from_ts(&format!("{}.0", 1000 - (pages - 1))).unwrap();
+        assert_eq!(store.last_pull_at("slack"), Some(started));
+        assert_eq!(store.pull_gap("slack").map(|g| g.1), Some(c1_oldest));
+
+        // Run 2: both channels drain the gap, bounded by latest=, and it closes.
+        let (base, server) =
+            serve_raw(vec![history_page(500, 1, None), history_page(400, 1, None)]).await;
+        pull_from(&client, "t", &base, Some("C1,C2"), &store, Utc::now())
+            .await
+            .unwrap();
+        let reqs = server.await.unwrap();
+
+        let latest = format!("&latest={}&inclusive=true", to_ts(c1_oldest));
+        for id in ["C1", "C2"] {
+            let sent = for_channel(&reqs, id);
+            assert!(sent.len() == 1 && sent[0].contains(&latest), "{sent:?}");
+        }
+        assert_eq!(store.pull_gap("slack"), None);
+        assert_eq!(store.last_pull_at("slack"), Some(started));
+
+        let _ = std::fs::remove_file(path);
+    }
+
+    #[tokio::test]
+    async fn rate_limited_mid_run_fails_and_logs_no_pull() {
+        let path = crate::memory::tests::temp_db_path("slack-ratelimit");
+        let store = crate::memory::tests::store_at(&path);
+
+        // Page 1 succeeds; page 2 is rate limited. Before, that was a partial Ok and the
+        // marker moved past the skipped messages.
+        let (base, _server) = serve_raw(vec![
+            history_page(0, 7, Some("cur-2")),
+            "{\"ok\":false,\"error\":\"ratelimited\"}".to_string(),
+        ])
+        .await;
+        let result = pull_from(
+            &reqwest::Client::new(),
+            "t",
+            &base,
+            Some("C1"),
+            &store,
+            Utc::now(),
+        )
+        .await;
+
+        let err = result.expect_err("a rate-limited page must fail the run");
+        assert!(err.to_string().contains("ratelimited"), "{err}");
+        assert_eq!(store.last_pull_at("slack"), None);
+        assert_eq!(store.pull_gap("slack"), None);
+
+        let _ = std::fs::remove_file(path);
     }
 }

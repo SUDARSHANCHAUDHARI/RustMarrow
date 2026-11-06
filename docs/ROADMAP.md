@@ -21,7 +21,6 @@ This is a solo-maintained roadmap. Items are practical possibilities, not promis
 
 - A hosted memory service.
 - Public sync by default.
-- GitHub Actions workflow files.
 
 ## Feature Blog Angles
 

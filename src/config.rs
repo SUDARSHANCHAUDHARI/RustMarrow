@@ -2,9 +2,9 @@ use anyhow::{Context, Result};
 use std::path::PathBuf;
 
 pub struct Config {
-    pub github_token: String,
-    pub github_username: String,
-    pub anthropic_api_key: String,
+    pub github_token: Option<String>,
+    pub github_username: Option<String>,
+    pub anthropic_api_key: Option<String>,
     pub db_path: PathBuf,
     pub obsidian_vault_path: Option<PathBuf>,
     pub google_client_id: Option<String>,
@@ -24,7 +24,9 @@ impl Config {
         if home_env.exists() {
             dotenvy::from_path(&home_env).ok();
         }
-        dotenvy::dotenv().ok();
+        // Current directory only. dotenvy::dotenv() also walks up parent directories, which
+        // picked up other projects' .env files when run inside them.
+        dotenvy::from_path(".env").ok();
 
         let db_path = std::env::var("MARROW_DB_PATH")
             .map(PathBuf::from)
@@ -36,15 +38,23 @@ impl Config {
             });
 
         if let Some(parent) = db_path.parent() {
-            std::fs::create_dir_all(parent)?;
+            // Lock down only a folder we create: MARROW_DB_PATH may point into a shared one.
+            if !parent.exists() {
+                std::fs::create_dir_all(parent)?;
+                #[cfg(unix)]
+                {
+                    use std::os::unix::fs::PermissionsExt;
+                    std::fs::set_permissions(parent, std::fs::Permissions::from_mode(0o700))?;
+                }
+            }
         }
 
         Ok(Self {
-            github_token: std::env::var("GITHUB_TOKEN")
-                .context("GITHUB_TOKEN not set — copy .env.example to .env and fill it in")?,
-            github_username: std::env::var("GITHUB_USERNAME").context("GITHUB_USERNAME not set")?,
-            anthropic_api_key: std::env::var("ANTHROPIC_API_KEY")
-                .context("ANTHROPIC_API_KEY not set")?,
+            // Required only by the commands that use them (see github() / anthropic_key()),
+            // so local commands like search, status and export work without them.
+            github_token: std::env::var("GITHUB_TOKEN").ok(),
+            github_username: std::env::var("GITHUB_USERNAME").ok(),
+            anthropic_api_key: std::env::var("ANTHROPIC_API_KEY").ok(),
             db_path,
             obsidian_vault_path: std::env::var("OBSIDIAN_VAULT_PATH").ok().map(PathBuf::from),
             google_client_id: std::env::var("GOOGLE_CLIENT_ID").ok(),
@@ -53,6 +63,25 @@ impl Config {
             slack_token: std::env::var("SLACK_TOKEN").ok(),
             slack_channels: std::env::var("SLACK_CHANNELS").ok(),
         })
+    }
+
+    /// GitHub token and username, or an error naming the missing variable.
+    pub fn github(&self) -> Result<(&str, &str)> {
+        let token = self
+            .github_token
+            .as_deref()
+            .context("GITHUB_TOKEN not set — copy .env.example to ~/.marrow/.env and fill it in")?;
+        let user = self
+            .github_username
+            .as_deref()
+            .context("GITHUB_USERNAME not set")?;
+        Ok((token, user))
+    }
+
+    pub fn anthropic_key(&self) -> Result<&str> {
+        self.anthropic_api_key
+            .as_deref()
+            .context("ANTHROPIC_API_KEY not set")
     }
 
     pub fn google_creds(&self) -> Option<(&str, &str, &str)> {
@@ -74,9 +103,9 @@ mod tests {
     #[test]
     fn google_creds_returns_none_when_any_field_missing() {
         let cfg = Config {
-            github_token: "t".into(),
-            github_username: "u".into(),
-            anthropic_api_key: "k".into(),
+            github_token: Some("t".into()),
+            github_username: Some("u".into()),
+            anthropic_api_key: Some("k".into()),
             db_path: PathBuf::from("/tmp/marrow.db"),
             obsidian_vault_path: None,
             google_client_id: Some("id".into()),
@@ -91,9 +120,9 @@ mod tests {
     #[test]
     fn google_creds_returns_some_when_all_present() {
         let cfg = Config {
-            github_token: "t".into(),
-            github_username: "u".into(),
-            anthropic_api_key: "k".into(),
+            github_token: Some("t".into()),
+            github_username: Some("u".into()),
+            anthropic_api_key: Some("k".into()),
             db_path: PathBuf::from("/tmp/marrow.db"),
             obsidian_vault_path: None,
             google_client_id: Some("id".into()),

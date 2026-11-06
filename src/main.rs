@@ -41,7 +41,7 @@ enum Command {
         /// Source to clear: github, gmail, calendar, slack
         source: String,
     },
-    /// Delete one chunk by id (get id from `marrow search`)
+    /// Delete one chunk by id (get id from `rustmarrow search`)
     Forget { id: i64 },
     /// Open the Obsidian vault Marrow folder (macOS)
     Open,
@@ -69,7 +69,7 @@ enum Command {
 #[tokio::main]
 async fn main() -> Result<()> {
     tracing_subscriber::fmt()
-        .with_env_filter(EnvFilter::from_default_env().add_directive("marrow=info".parse()?))
+        .with_env_filter(EnvFilter::from_default_env().add_directive("rustmarrow=info".parse()?))
         .init();
 
     let cli = Cli::parse(); // parse first so --help works without .env

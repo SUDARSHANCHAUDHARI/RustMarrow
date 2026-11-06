@@ -12,7 +12,7 @@ Minimal required variables:
 
 ```dotenv
 GITHUB_TOKEN=your_github_pat_here
-GITHUB_USERNAME=SUDARSHANCHAUDHARI
+GITHUB_USERNAME=your_github_username
 ANTHROPIC_API_KEY=your_anthropic_key_here
 ```
 
